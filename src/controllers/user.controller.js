@@ -3,6 +3,7 @@ import UsuarioRol from '../models/usuarioRol.model.js';
 import Rol from '../models/rol.model.js';
 import sequelize from '../config/connect.db.js';
 import bcrypt from 'bcrypt';
+import { Op } from 'sequelize';
 import { createError } from '../utils/errorHelper.js';
 
 export class UserController {
@@ -70,11 +71,29 @@ export class UserController {
   static async getById(req, res) {
     try {
       const { id } = req.params;
-      const user = await Usuario.findByPk(id);
+      const user = await Usuario.findByPk(id, {
+        attributes: { exclude: ['contraseña'] }
+      });
       if (!user) {
         return res.status(404).json(createError('ERR_100'));
       }
-      res.json(user);
+
+      const userRoles = await UsuarioRol.findAll({
+        where: { id_usuario: id },
+        include: [{ model: Rol, as: 'rol' }]
+      });
+
+      const roles = userRoles
+        .map((userRole) => userRole.rol?.nombre_rol)
+        .filter(Boolean);
+
+      const primaryRoleId = userRoles[0]?.id_rol ?? null;
+
+      res.json({
+        ...user.toJSON(),
+        id_rol: primaryRoleId,
+        roles
+      });
     } catch (error) {
       res.status(500).json(createError('ERR_900', error.message, null, { stack: error.stack }));
     }
@@ -353,10 +372,7 @@ export class UserController {
         url_imagen: url_imagen || null,
       };
 
-      const [updated] = await Usuario.update(userPayload, { where: { id_usuario: id } });
-      if (!updated) {
-        return res.status(404).json(createError('ERR_100'));
-      }
+      await Usuario.update(userPayload, { where: { id_usuario: id } });
 
       // Update password if provided
       if (password) {
@@ -414,6 +430,13 @@ export class UserController {
   static async delete(req, res) {
     try {
       const { id } = req.params;
+      if (req.user?.id_usuario === id) {
+        return res.status(403).json(
+          createError('ERR_006', 'No puedes eliminar la cuenta con la que tienes la sesion activa')
+        );
+      }
+
+      await UsuarioRol.destroy({ where: { id_usuario: id } });
       const deleted = await Usuario.destroy({ where: { id_usuario: id } });
       if (!deleted) {
         return res.status(404).json(createError('ERR_100'));
